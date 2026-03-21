@@ -427,7 +427,6 @@ def configure_server_for_http():
                 )
             else:
                 # Standard OAuth 2.1 mode: use FastMCP's GoogleProvider
-                mcp_session_seconds = int(os.getenv("MCP_SESSION_DURATION_SECONDS", "7776000"))
                 provider = GoogleProvider(
                     client_id=config.client_id,
                     client_secret=config.client_secret,
@@ -436,7 +435,6 @@ def configure_server_for_http():
                     required_scopes=required_scopes,
                     client_storage=client_storage,
                     jwt_signing_key=jwt_signing_key,
-                    fallback_access_token_expiry_seconds=mcp_session_seconds,
                 )
 
                 # Enable protocol-level auth
