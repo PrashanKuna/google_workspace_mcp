@@ -137,7 +137,21 @@ def _ensure_legacy_callback_route() -> None:
     server.custom_route("/oauth2callback", methods=["GET"])(legacy_oauth2_callback)
     _legacy_callback_registered = True
 
+class ExtendedSessionGoogleProvider(GoogleProvider):
+    """GoogleProvider with configurable MCP JWT session duration."""
 
+    def __init__(self, *, mcp_session_seconds: int = 7776000, **kwargs):
+        super().__init__(**kwargs)
+        self._mcp_session_seconds = mcp_session_seconds
+
+    async def exchange_authorization_code(self, client, authorization_code):
+        """Inject custom session TTL before FastMCP issues the JWT to clients."""
+        code_model = await self._code_store.get(key=authorization_code.code)
+        if code_model is not None and code_model.idp_tokens:
+            new_idp_tokens = {**code_model.idp_tokens, "expires_in": self._mcp_session_seconds}
+            new_code_model = code_model.model_copy(update={"idp_tokens": new_idp_tokens})
+            await self._code_store.put(key=authorization_code.code, value=new_code_model)
+        return await super().exchange_authorization_code(client, authorization_code)
 def configure_server_for_http():
     """
     Configures the authentication provider for HTTP transport.
@@ -427,7 +441,9 @@ def configure_server_for_http():
                 )
             else:
                 # Standard OAuth 2.1 mode: use FastMCP's GoogleProvider
-                provider = GoogleProvider(
+                mcp_session_seconds = int(os.getenv("MCP_SESSION_DURATION_SECONDS", "7776000"))
+                provider = ExtendedSessionGoogleProvider(
+                    mcp_session_seconds=mcp_session_seconds,
                     client_id=config.client_id,
                     client_secret=config.client_secret,
                     base_url=config.get_oauth_base_url(),
