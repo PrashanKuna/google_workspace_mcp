@@ -406,13 +406,31 @@ def _determine_oauth_prompt(
         return "consent"
 
     if has_required_scopes(existing_credentials.scopes, required_scopes):
-        logger.info(
-            f"[start_auth_flow] Using prompt='select_account' for re-auth of {normalized_email}."
-        )
-        return "select_account"
+        # Verify the credentials can still be refreshed before using select_account.
+        # When credentials are revoked, Google's select_account prompt may produce
+        # incomplete callbacks (missing state parameter, partial scopes).
+        if existing_credentials.valid:
+            logger.info(
+                f"[start_auth_flow] Using prompt='select_account' for re-auth of {normalized_email}."
+            )
+            return "select_account"
+        if existing_credentials.refresh_token:
+            try:
+                existing_credentials.refresh(Request())
+                logger.info(
+                    f"[start_auth_flow] Using prompt='select_account' for re-auth of {normalized_email}."
+                )
+                return "select_account"
+            except Exception:
+                logger.info(
+                    f"[start_auth_flow] Credentials for {normalized_email} cannot be refreshed; "
+                    "using prompt='consent' to ensure full re-authorization."
+                )
+                return "consent"
 
     logger.info(
-        f"[start_auth_flow] Using prompt='consent' (existing credentials for {normalized_email} are missing required scopes)."
+        f"[start_auth_flow] Using prompt='consent' (existing credentials for {normalized_email} "
+        "are not refreshable or are missing required scopes)."
     )
     return "consent"
 
@@ -598,12 +616,28 @@ def handle_auth_callback(
         state_values = parse_qs(parsed_response.query).get("state")
         state = state_values[0] if state_values else None
 
-        state_info = store.validate_and_consume_oauth_state(
-            state, session_id=session_id
-        )
+        if state:
+            state_info = store.validate_and_consume_oauth_state(
+                state, session_id=session_id
+            )
+        elif session_id is None:
+            # stdio mode fallback: state may be absent from Google's redirect
+            # (e.g. when prompt=select_account is used with revoked credentials).
+            # Use the most recently stored state to recover the PKCE code_verifier.
+            logger.warning(
+                "OAuth callback missing state parameter; using most recent stored state (stdio fallback)"
+            )
+            state_info = store.consume_latest_oauth_state()
+            if not state_info:
+                raise ValueError(
+                    "Missing OAuth state parameter and no stored state available"
+                )
+        else:
+            raise ValueError("Missing OAuth state parameter")
+
         logger.debug(
-            "Validated OAuth callback state %s for session %s",
-            (state[:8] if state else "<missing>"),
+            "OAuth callback state %s for session %s",
+            (state[:8] if state else "<fallback>"),
             state_info.get("session_id") or "<unknown>",
         )
 
@@ -1113,19 +1147,24 @@ async def get_authenticated_google_service(
             f"[{tool_name}] Valid email '{user_google_email}' provided, initiating auth flow."
         )
 
-        # Ensure OAuth callback is available
-        from auth.oauth_callback_server import ensure_oauth_callback_available
-
         redirect_uri = get_oauth_redirect_uri()
-        config = get_oauth_config()
-        success, error_msg = ensure_oauth_callback_available(
-            get_transport_mode(), config.port, config.base_uri
-        )
-        if not success:
-            error_detail = f" ({error_msg})" if error_msg else ""
-            raise GoogleAuthenticationError(
-                f"Cannot initiate OAuth flow - callback server unavailable{error_detail}"
+        transport_mode = get_transport_mode()
+        if transport_mode == "stdio":
+            # Only stdio legacy OAuth depends on the standalone callback server.
+            from auth.oauth_callback_server import ensure_oauth_callback_available
+
+            config = get_oauth_config()
+            success, error_msg = await asyncio.to_thread(
+                ensure_oauth_callback_available,
+                transport_mode,
+                config.port,
+                config.base_uri,
             )
+            if not success:
+                error_detail = f" ({error_msg})" if error_msg else ""
+                raise GoogleAuthenticationError(
+                    f"Cannot initiate OAuth flow - callback server unavailable{error_detail}"
+                )
 
         # Generate auth URL and raise exception with it
         auth_response = await start_auth_flow(
