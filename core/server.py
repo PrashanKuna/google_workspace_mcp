@@ -650,11 +650,7 @@ def configure_server_for_http():
                 )
             else:
                 # Standard OAuth 2.1 mode: use FastMCP's GoogleProvider
-<<<<<<< HEAD
                 mcp_session_seconds = int(os.getenv("MCP_SESSION_DURATION_SECONDS", "7776000"))
-                provider = ExtendedSessionGoogleProvider(
-                    mcp_session_seconds=mcp_session_seconds,
-=======
                 allowed_client_redirect_uris = _parse_allowed_redirect_uris(
                     os.getenv("WORKSPACE_MCP_ALLOWED_CLIENT_REDIRECT_URIS")
                 )
@@ -663,8 +659,8 @@ def configure_server_for_http():
                         "OAuth 2.1: restricting DCR client redirect URIs to allowlist: %s",
                         allowed_client_redirect_uris,
                     )
-                provider = GoogleProvider(
->>>>>>> upstream/main
+                provider = ExtendedSessionGoogleProvider(
+                    mcp_session_seconds=mcp_session_seconds,
                     client_id=config.client_id,
                     client_secret=config.client_secret,
                     base_url=config.get_oauth_base_url(),
@@ -675,9 +671,6 @@ def configure_server_for_http():
                     jwt_signing_key=jwt_signing_key,
                     allowed_client_redirect_uris=allowed_client_redirect_uris,
                 )
-<<<<<<< HEAD
-
-=======
                 if provider.client_registration_options is not None:
                     # Keep protocol-level auth limited to base identity scopes, but
                     # allow dynamically registered MCP clients to request any scope
@@ -692,7 +685,6 @@ def configure_server_for_http():
                 cimd_manager = getattr(provider, "_cimd_manager", None)
                 if cimd_manager is not None:
                     cimd_manager.default_scope = cimd_default_scope
->>>>>>> upstream/main
                 # Enable protocol-level auth
                 server.auth = provider
                 logger.info(
